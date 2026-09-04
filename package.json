@@ -1,0 +1,32 @@
+{
+  "name": "banking-rag-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "start": "tsx src/start.ts",
+    "dev": "tsx watch src/start.ts",
+    "ingest": "tsx src/ingest.ts",
+    "test": "tsx --test test/**/*.test.ts",
+    "test:integration": "tsx test/integration.ts",
+    "test:exact": "tsx test/exact-requirement.ts",
+    "test:evaluation": "tsx test/evaluation.ts",
+    "test:mcp": "tsx --test test/mcp-client.ts",
+    "test:phase7": "tsx --test test/phase7.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^1.21.0",
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "@supabase/supabase-js": "^2.57.0",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.5.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.2"
+  }
+}

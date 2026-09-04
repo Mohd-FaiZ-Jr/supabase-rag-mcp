@@ -100,10 +100,15 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
         const result = await indexDocument(document, dependencySet.gemini, dependencySet.supabase, logger);
         processed.push({ path, status: result.status === "skipped" ? "skipped" : "ingested" });
         logger.log(`Ingestion successful: ${path}`);
-      } catch {
+      } catch (error) {
         ingestionFailed = true;
         processed.push({ path, status: "failed" });
-        logger.error(`Ingestion failed: ${path}`);
+        logger.error("Ingestion failed", {
+          path,
+          errorName: error instanceof Error ? error.name : "UnknownError",
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined
+        });
       }
     }
 

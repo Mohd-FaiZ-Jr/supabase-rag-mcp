@@ -135,6 +135,29 @@ test("malformed JSON is rejected safely", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("ingestion failures log the underlying error and return 502", async () => {
+  const logs: unknown[][] = [];
+  const dependencies = createDependencies().dependencies;
+  dependencies.gemini.embedDocument = async () => {
+    throw new Error("Gemini embedding request failed (503)");
+  };
+  dependencies.logger = { log: () => undefined, error: (...args: unknown[]) => logs.push(args) };
+
+  const response = await requestWebhook(pushPayload([{ added: ["documents/BRD/failing.md"] }]), { dependencies });
+  const result = await json(response);
+  assert.equal(response.status, 502);
+  assert.equal(result.ok, false);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], "Ingestion failed");
+  assert.deepEqual(logs[0][1], {
+    path: "documents/BRD/failing.md",
+    errorName: "Error",
+    error: "Gemini embedding request failed (503)",
+    stack: (logs[0][1] as { stack: string }).stack
+  });
+  assert.match((logs[0][1] as { stack: string }).stack, /Gemini embedding request failed \(503\)/);
+});
+
 test("unsupported formats, unrelated files, unsafe paths, and removals are reported", async () => {
   const { dependencies, calls } = createDependencies();
   const response = await requestWebhook(pushPayload([{

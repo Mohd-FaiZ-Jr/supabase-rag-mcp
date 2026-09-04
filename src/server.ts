@@ -1,7 +1,7 @@
 import express, { type Request, type Response } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { loadConfig, type AppConfig } from "./config.js";
+import { missingRequiredSecrets, type AppConfig } from "./config.js";
 import { GeminiEmbeddingService } from "./services/gemini.js";
 import { SupabaseService } from "./services/supabase.js";
 import { createPreviousRcaHandler, createRequirementHandler, createSearchHandler, previousRcaInputSchema, requirementInputSchema, searchInputSchema } from "./tools/search.js";
@@ -31,10 +31,15 @@ export function createApp(config: AppConfig) {
   app.get("/health", (_request, response) => response.json({ status: "ok", service: "banking-rag-mcp" }));
 
   app.post("/mcp", async (request: Request, response: Response) => {
-    const server = createMcpServer(config);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    response.on("close", () => void transport.close());
     try {
+      const missingSecrets = missingRequiredSecrets(config);
+      if (missingSecrets.length > 0) {
+        response.status(503).json({ error: "Service is not configured", missing: missingSecrets });
+        return;
+      }
+      const server = createMcpServer(config);
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      response.on("close", () => void transport.close());
       await server.connect(transport);
       await transport.handleRequest(request, response, request.body);
     } catch (error) {

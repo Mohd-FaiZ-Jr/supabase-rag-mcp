@@ -20,6 +20,17 @@ function required(name: string): string {
   return value;
 }
 
+export const REQUIRED_SECRET_NAMES = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "GEMINI_API_KEY"] as const;
+
+export function missingRequiredSecrets(config: Pick<AppConfig, "supabaseUrl" | "supabaseServiceRoleKey" | "geminiApiKey">): string[] {
+  const values = {
+    SUPABASE_URL: config.supabaseUrl,
+    SUPABASE_SERVICE_ROLE_KEY: config.supabaseServiceRoleKey,
+    GEMINI_API_KEY: config.geminiApiKey
+  };
+  return REQUIRED_SECRET_NAMES.filter((name) => !values[name]?.trim());
+}
+
 function positiveInteger(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);

@@ -25,6 +25,18 @@ npm run test:integration
 
 `test:integration` generates a real Gemini embedding, checks Supabase connectivity, and performs a real vector search. With an empty database it reports zero results and never fabricates evidence.
 
+## Deployment
+
+Configure these environment variables in the deployment platform's service settings before using `/mcp`:
+
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+GEMINI_API_KEY=your-gemini-api-key
+```
+
+The server binds to `0.0.0.0` and uses the platform-provided `PORT` value. It can start without secrets so platform health checks succeed; `/mcp` returns `503` and identifies the missing variables until the service is configured.
+
 Apply `supabase/migrations/002_retrieval_filters.sql` after the original migration before using document-type filters or exact requirement lookup. It preserves the 0.70 similarity threshold and cosine/HNSW retrieval, adds server-side `BRD`/`RCA` filtering, and adds the exact `get_requirement_chunks` RPC.
 
 ## GitHub ingestion

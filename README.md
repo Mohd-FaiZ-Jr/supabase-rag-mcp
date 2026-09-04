@@ -1,4 +1,4 @@
-# Banking RAG MCP Server
+# Banking RAG MCP Server!
 
 Cloud-ready MCP server for retrieving banking document evidence from Supabase pgvector. It uses Gemini embeddings and does not generate RCA conclusions. It also supports explicit single-file ingestion from GitHub.
 

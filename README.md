@@ -65,6 +65,23 @@ To verify semantic retrieval against the indexed source, set `EXPECTED_GITHUB_PA
 npm run test:integration
 ```
 
+## GitHub Webhook
+
+`POST /webhook/github` automatically re-indexes changed Markdown documents from the configured GitHub documentation repository. It verifies the GitHub HMAC SHA-256 signature, repository, and branch before calling the existing ingestion pipeline.
+
+Required variables:
+
+```env
+GITHUB_WEBHOOK_SECRET=your-github-webhook-secret
+GITHUB_OWNER=your-github-owner
+GITHUB_REPO=your-github-repository
+GITHUB_BRANCH=main
+```
+
+Supported: `documents/**/*.md` under `documents/BRD/` or `documents/RCA/`.
+
+Ignored for now: `.csv`, `.docx`, `.pdf`, and `.xlsx`. Removed Markdown files are reported as `deletion_not_supported` because the current Supabase layer does not provide safe document deletion.
+
 ## MCP
 
 The Streamable HTTP endpoint is `POST /mcp`. It exposes exactly three business-facing tools:

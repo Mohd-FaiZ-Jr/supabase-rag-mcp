@@ -5,6 +5,7 @@ import { missingRequiredSecrets, type AppConfig } from "./config.js";
 import { GeminiEmbeddingService } from "./services/gemini.js";
 import { SupabaseService } from "./services/supabase.js";
 import { createPreviousRcaHandler, createRequirementHandler, createSearchHandler, previousRcaInputSchema, requirementInputSchema, searchInputSchema } from "./tools/search.js";
+import { createGithubWebhookHandler, type GithubWebhookDependencies } from "./webhooks/github.js";
 
 export function createMcpServer(config: AppConfig): McpServer {
   const gemini = new GeminiEmbeddingService(config);
@@ -25,10 +26,11 @@ export function createMcpServer(config: AppConfig): McpServer {
   return server;
 }
 
-export function createApp(config: AppConfig) {
+export function createApp(config: AppConfig, webhookDependencies?: GithubWebhookDependencies) {
   const app = express();
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: "1mb", verify: (request, _response, body) => { (request as Request & { rawBody?: Buffer }).rawBody = Buffer.from(body); } }));
   app.get("/health", (_request, response) => response.json({ status: "ok", service: "banking-rag-mcp" }));
+  app.post("/webhook/github", createGithubWebhookHandler(config, webhookDependencies));
 
   app.post("/mcp", async (request: Request, response: Response) => {
     try {

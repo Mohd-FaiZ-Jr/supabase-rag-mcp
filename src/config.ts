@@ -12,6 +12,7 @@ export type AppConfig = {
   githubOwner: string;
   githubRepo: string;
   githubBranch: string;
+  githubWebhookSecret?: string;
 };
 
 function required(name: string): string {
@@ -55,6 +56,7 @@ export function loadConfig(requireSecrets = true): AppConfig {
     githubToken: process.env.GITHUB_TOKEN?.trim() ?? "",
     githubOwner: process.env.GITHUB_OWNER?.trim() ?? "",
     githubRepo: process.env.GITHUB_REPO?.trim() ?? "",
-    githubBranch: process.env.GITHUB_BRANCH?.trim() || "main"
+    githubBranch: process.env.GITHUB_BRANCH?.trim() || "main",
+    githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET?.trim() ?? ""
   };
 }

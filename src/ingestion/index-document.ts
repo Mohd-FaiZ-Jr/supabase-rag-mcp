@@ -67,7 +67,8 @@ export async function indexDocument(
   return { status: "indexed", chunkCount: chunks.length, contentHash };
 }
 
-export function detectDocumentType(path: string): "BRD" | "RCA" {
+export function detectDocumentType(path: string): "BRD" | "RCA" | "UAT" {
+  if (/(?:^|\/)documents\/UAT(?:\/|$)/i.test(path)) return "UAT";
   const match = /(?:^|\/)documents\/(BRD|RCA)(?:\/|$)/i.exec(path);
   if (!match) throw new Error(`Unsupported document path: ${path}. Expected documents/BRD/... or documents/RCA/...`);
   return match[1].toUpperCase() as "BRD" | "RCA";

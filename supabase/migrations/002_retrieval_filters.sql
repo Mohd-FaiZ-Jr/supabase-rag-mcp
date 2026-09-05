@@ -24,6 +24,7 @@ as $$
     (1 - (dc.embedding <=> query_embedding))::real as similarity
   from public.document_chunks dc
   where (1 - (dc.embedding <=> query_embedding)) >= match_threshold
+    and (document_type_filter is null or document_type_filter in ('BRD', 'RCA', 'UAT'))
     and (document_type_filter is null or dc.metadata ->> 'document_type' = document_type_filter)
   order by dc.embedding <=> query_embedding
   limit greatest(match_count, 0);

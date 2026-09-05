@@ -5,11 +5,11 @@ import { SupabaseService } from "../services/supabase.js";
 export const searchInputSchema = {
   query: z.string().trim().min(1).max(2000),
   topK: z.number().int().min(1).max(10).optional(),
-  documentType: z.enum(["BRD", "RCA"]).optional()
+  documentType: z.enum(["BRD", "RCA", "UAT"]).optional()
 };
 
 export function createSearchHandler(gemini: GeminiEmbeddingService, supabase: SupabaseService, defaultTopK: number) {
-  return async ({ query, topK, documentType }: { query: string; topK?: number; documentType?: "BRD" | "RCA" }) => {
+  return async ({ query, topK, documentType }: { query: string; topK?: number; documentType?: "BRD" | "RCA" | "UAT" }) => {
     const embedding = await gemini.embedQuery(query);
     const results = await supabase.searchDocuments(embedding, topK ?? defaultTopK, documentType);
     const evidence = results.map((result) => toEvidence(result));

@@ -3,7 +3,7 @@ import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import { indexDocument } from "../ingestion/index-document.js";
 import { ingestUATObservations } from "../ingestion/uat-observation.js";
-import { parseUATWorkbook } from "../parser/uat-excel.js";
+import { buildUATDocumentContent, parseUATWorkbook } from "../parser/uat-excel.js";
 import { GeminiEmbeddingService } from "../services/gemini.js";
 import { GithubService } from "../services/github.js";
 import { SupabaseService } from "../services/supabase.js";
@@ -109,7 +109,8 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
           const file = await dependencySet.github.getFile(path);
           const parsed = parseUATWorkbook(file.content, path);
           const result = await ingestUATObservations(parsed.observations, parsed.sheets, dependencySet.supabase);
-          processed.push({ path, status: result.status, observationsProcessed: result.observationsProcessed, observationsCreated: result.observationsCreated, observationsUpdated: result.observationsUpdated });
+          const indexed = await indexDocument({ ...file, content: buildUATDocumentContent(parsed) }, dependencySet.gemini, dependencySet.supabase, logger);
+          processed.push({ path, status: indexed.status === "skipped" ? "skipped" : result.status, observationsProcessed: result.observationsProcessed, observationsCreated: result.observationsCreated, observationsUpdated: result.observationsUpdated });
         } else {
           const document = await dependencySet.github.getMarkdownFile(path);
           const result = await indexDocument(document, dependencySet.gemini, dependencySet.supabase, logger);

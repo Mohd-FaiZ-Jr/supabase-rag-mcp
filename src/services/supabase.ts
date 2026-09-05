@@ -26,7 +26,7 @@ export type DocumentChunkInsert = {
 
 export type RequirementResult = {
   requirementId: string;
-  documentType: "BRD" | "RCA";
+  documentType: "BRD" | "RCA" | "UAT";
   source: string;
   sections: string[];
   chunks: Array<{ chunkId: string; content: string; metadata: ChunkMetadata }>;
@@ -67,7 +67,7 @@ export class SupabaseService {
     });
   }
 
-  async searchDocuments(embedding: number[], matchCount: number, documentType?: "BRD" | "RCA"): Promise<SearchResult[]> {
+  async searchDocuments(embedding: number[], matchCount: number, documentType?: "BRD" | "RCA" | "UAT"): Promise<SearchResult[]> {
     if (embedding.length !== this.config.embeddingDimension) {
       throw new Error(`Embedding dimension mismatch: expected ${this.config.embeddingDimension}, received ${embedding.length}`);
     }

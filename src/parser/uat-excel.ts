@@ -22,16 +22,42 @@ export type UATObservation = {
   source: { githubPath: string; sheetName: string; rowNumber: number };
 };
 
-export type UATParseResult = { observations: UATObservation[]; sheets: string[] };
+export type UATSummary = {
+  testCaseId?: string;
+  testCaseTitle?: string;
+  overallStatus?: string;
+  expectedResult?: string;
+  actualResult?: string;
+  behavioralDelta?: string;
+};
+
+export type UATParseResult = {
+  observations: UATObservation[];
+  sheets: string[];
+  testCase?: string;
+  applicationUrl?: string;
+  summary?: UATSummary;
+};
 
 const aliases: Record<string, string> = {
   observationid: "observationId", obsid: "observationId", testcaseid: "testCaseId", testcase: "testCaseId",
-  module: "module", processarea: "processArea", processcode: "processCode", system: "system", platform: "system",
-  transactionid: "transactionId", documentid: "transactionId", title: "title", observationtitle: "title",
+  module: "module", processarea: "processArea", processcode: "processCode", system: "system", platform: "system", systemplatform: "system",
+  transactionid: "transactionId", documentid: "transactionId", transactiondocumentid: "transactionId", title: "title", observationtitle: "title",
   expectedbehavior: "expectedBehavior", expectedbehaviour: "expectedBehavior", actualbehavior: "actualBehavior", actualbehaviour: "actualBehavior",
-  evidence: "evidenceReferences", evidencereference: "evidenceReferences", evidencereferences: "evidenceReferences", severity: "severity",
-  rootcause: "rootCause", resolutiondecision: "resolutionDecision", resolutionnotes: "resolutionDecision",
-  productlimitation: "productLimitationFlag", productlimitationflag: "productLimitationFlag", resolutionstatus: "resolutionStatus"
+  evidence: "evidenceReferences", evidencereference: "evidenceReferences", evidencereferences: "evidenceReferences", evidenceref: "evidenceReferences", screenshot: "evidenceReferences", screenshotevidenceref: "evidenceReferences", severity: "severity",
+  rootcause: "rootCause", resolutiondecision: "resolutionDecision", resolutionnotes: "resolutionDecision", resolutiondecisionnotes: "resolutionDecision",
+  productlimitation: "productLimitationFlag", productlimitationflag: "productLimitationFlag", sapproductlimitationflag: "productLimitationFlag", resolutionstatus: "resolutionStatus"
+};
+
+const summaryAliases: Record<string, keyof UATSummary> = {
+  testcaseid: "testCaseId", testcase: "testCaseId", testcasetitle: "testCaseTitle", title: "testCaseTitle",
+  overallstatus: "overallStatus", expectedresult: "expectedResult", actualresult: "actualResult",
+  behavioraldelta: "behavioralDelta", behaviouraldelta: "behavioralDelta"
+};
+
+const instructionLabels = {
+  testCase: new Set(["testcase", "testcaseid", "testcasename"]),
+  applicationUrl: new Set(["applicationurl", "appurl", "url"])
 };
 
 export function parseUATWorkbook(buffer: Buffer, githubPath: string): UATParseResult {
@@ -46,8 +72,21 @@ export function parseUATWorkbook(buffer: Buffer, githubPath: string): UATParseRe
   const observations: UATObservation[] = [];
   const recognizedSheets: string[] = [];
   const seen = new Set<string>();
+  let testCase: string | undefined;
+  let applicationUrl: string | undefined;
+  let summary: UATSummary | undefined;
   for (const sheetName of workbook.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false }) as unknown[][];
+    if (sheetName.trim().toLowerCase() === "instructions") {
+      testCase = findInstructionValue(rows, instructionLabels.testCase) ?? testCase;
+      applicationUrl = findInstructionValue(rows, instructionLabels.applicationUrl) ?? applicationUrl;
+      continue;
+    }
+    if (sheetName.trim().toLowerCase() === "_dropdowns") continue;
+    if (sheetName.trim().toLowerCase() === "summary dashboard") {
+      summary = parseSummary(rows) ?? summary;
+      continue;
+    }
     const header = findHeader(rows);
     if (!header) continue;
     recognizedSheets.push(sheetName);
@@ -86,7 +125,34 @@ export function parseUATWorkbook(buffer: Buffer, githubPath: string): UATParseRe
   }
   if (recognizedSheets.length === 0) throw new Error(`Workbook contains no recognizable UAT observation sheet: ${githubPath}`);
   if (observations.length === 0) throw new Error(`Workbook contains no observation rows: ${githubPath}`);
-  return { observations, sheets: recognizedSheets };
+  return { observations, sheets: recognizedSheets, testCase, applicationUrl, summary };
+}
+
+export function buildUATDocumentContent(result: UATParseResult): string {
+  const observationSections = result.observations.map((observation) => [
+    `## Observation ${observation.observationId}`,
+    `Test Case: ${result.testCase ?? observation.testCaseId ?? ""}`,
+    `Application: ${result.applicationUrl ?? ""}`,
+    `Observation ID: ${observation.observationId}`,
+    `Module: ${observation.module ?? ""}`,
+    `Observation Title: ${observation.title ?? ""}`,
+    `Expected Behaviour: ${observation.expectedBehavior}`,
+    `Actual Behaviour: ${observation.actualBehavior}`,
+    `Severity: ${observation.severity ?? ""}`,
+    ...(observation.evaluation?.rootCause ? [`Root Cause: ${observation.evaluation.rootCause}`] : []),
+    ...(observation.evaluation?.resolutionDecision ? [`Resolution/Decision Notes: ${observation.evaluation.resolutionDecision}`] : []),
+    ...(observation.evaluation?.resolutionStatus ? [`Resolution Status: ${observation.evaluation.resolutionStatus}`] : [])
+  ].join("\n")).join("\n\n");
+  const summarySection = result.summary ? [
+    "# UAT Summary",
+    `Test Case ID: ${result.summary.testCaseId ?? result.testCase ?? ""}`,
+    `Test Case Title: ${result.summary.testCaseTitle ?? ""}`,
+    `Overall Status: ${result.summary.overallStatus ?? ""}`,
+    `Expected Result: ${result.summary.expectedResult ?? ""}`,
+    `Actual Result: ${result.summary.actualResult ?? ""}`,
+    `Behavioral Delta: ${result.summary.behavioralDelta ?? ""}`
+  ].join("\n") : "";
+  return ["# UAT Observations", observationSections, summarySection].filter(Boolean).join("\n\n");
 }
 
 function findHeader(rows: unknown[][]): { row: number; values: unknown[] } | null {
@@ -96,6 +162,42 @@ function findHeader(rows: unknown[][]): { row: number; values: unknown[] } | nul
     if (["observationId", "expectedBehavior", "actualBehavior"].some((field) => fields.includes(field))) return { row, values };
   }
   return null;
+}
+
+function parseSummary(rows: unknown[][]): UATSummary | null {
+  const header = findNamedHeader(rows, summaryAliases);
+  if (!header) return null;
+  const columns = header.values.map((value, index) => ({ index, field: summaryAliases[normalizeHeader(value)] }));
+  for (let rowIndex = header.row + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (!row || row.every((value) => String(value ?? "").trim() === "")) continue;
+    const parsed: UATSummary = {};
+    for (const column of columns) if (column.field) parsed[column.field] = String(row[column.index] ?? "").trim();
+    return parsed;
+  }
+  return null;
+}
+
+function findNamedHeader(rows: unknown[][], names: Record<string, unknown>): { row: number; values: unknown[] } | null {
+  for (let row = 0; row < Math.min(rows.length, 50); row += 1) {
+    const values = rows[row] ?? [];
+    if (values.map((value) => names[normalizeHeader(value)]).filter(Boolean).length > 0) return { row, values };
+  }
+  return null;
+}
+
+function findInstructionValue(rows: unknown[][], labels: Set<string>): string | undefined {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    for (let index = 0; index < row.length; index += 1) {
+      if (!labels.has(normalizeHeader(row[index]))) continue;
+      const sameRowValue = row.slice(index + 1).map((value) => String(value ?? "").trim()).find(Boolean);
+      if (sameRowValue) return sameRowValue;
+      const nextRowValue = rows[rowIndex + 1]?.find((value) => String(value ?? "").trim());
+      if (nextRowValue) return String(nextRowValue).trim();
+    }
+  }
+  return undefined;
 }
 
 function normalizeHeader(value: unknown): string {

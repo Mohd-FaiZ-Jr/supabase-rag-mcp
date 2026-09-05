@@ -4,7 +4,7 @@ import { z } from "zod";
 export type IngestionDocument = GithubDocument;
 
 export const chunkMetadataSchema = z.object({
-  document_type: z.enum(["BRD", "RCA"]),
+  document_type: z.enum(["BRD", "RCA", "UAT"]),
   requirement_id: z.string().min(1).optional(),
   section: z.string().min(1),
   github_path: z.string().min(1)

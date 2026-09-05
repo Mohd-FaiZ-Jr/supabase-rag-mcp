@@ -9,6 +9,8 @@ export type GithubDocument = {
   branch: string;
 };
 
+export type GithubFile = Omit<GithubDocument, "content"> & { content: Buffer };
+
 type GithubContentResponse = {
   type?: string;
   name?: string;
@@ -21,8 +23,15 @@ export class GithubService {
   constructor(private readonly config: AppConfig) {}
 
   async getMarkdownFile(path: string): Promise<GithubDocument> {
-    this.validateConfiguration();
     if (!path.toLowerCase().endsWith(".md")) throw new Error(`GitHub ingestion currently supports Markdown files only: ${path}`);
+    const file = await this.getFile(path);
+    const content = file.content.toString("utf8");
+    if (!content.trim()) throw new Error(`GitHub document is empty: ${path}`);
+    return { ...file, content };
+  }
+
+  async getFile(path: string): Promise<GithubFile> {
+    this.validateConfiguration();
 
     const encodedPath = path.split("/").map(encodeURIComponent).join("/");
     const url = `https://api.github.com/repos/${encodeURIComponent(this.config.githubOwner)}/${encodeURIComponent(this.config.githubRepo)}/contents/${encodedPath}?ref=${encodeURIComponent(this.config.githubBranch)}`;
@@ -47,8 +56,8 @@ export class GithubService {
     if (payload.type !== "file" || !payload.content || payload.encoding !== "base64") {
       throw new Error(`GitHub path is not a supported encoded file: ${path}`);
     }
-    const content = Buffer.from(payload.content.replace(/\s/g, ""), "base64").toString("utf8");
-    if (!content.trim()) throw new Error(`GitHub document is empty: ${path}`);
+    const content = Buffer.from(payload.content.replace(/\s/g, ""), "base64");
+    if (content.length === 0) throw new Error(`GitHub file is empty: ${path}`);
 
     return {
       path: payload.path ?? path,

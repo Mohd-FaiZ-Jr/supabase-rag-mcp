@@ -32,6 +32,32 @@ export type RequirementResult = {
   chunks: Array<{ chunkId: string; content: string; metadata: ChunkMetadata }>;
 };
 
+export type UATObservationInsert = {
+  observation_id: string;
+  test_case_id?: string;
+  module?: string;
+  process_area?: string;
+  process_code?: string;
+  system?: string;
+  transaction_id?: string;
+  title?: string;
+  expected_behavior: string;
+  actual_behavior: string;
+  evidence_references: string[];
+  severity?: string;
+  source_github_path: string;
+  source_sheet: string;
+  source_row: number;
+  content_hash: string;
+};
+
+export type UATEvaluation = {
+  rootCause?: string;
+  resolutionDecision?: string;
+  productLimitationFlag?: string;
+  resolutionStatus?: string;
+};
+
 export class SupabaseService {
   private readonly client: SupabaseClient;
 
@@ -142,6 +168,38 @@ export class SupabaseService {
         throw new Error(`Supabase ingestion verification failed: chunk ${String(row.id)} does not contain a valid ${this.config.embeddingDimension}-dimensional embedding`);
       }
     }
+  }
+
+  async upsertUATObservation(record: UATObservationInsert): Promise<{ id: string; created: boolean; changed: boolean }> {
+    const existing = await this.client
+      .from("uat_observations")
+      .select("id, content_hash")
+      .eq("source_github_path", record.source_github_path)
+      .eq("observation_id", record.observation_id)
+      .maybeSingle();
+    if (existing.error) throw new Error(`Supabase UAT observation lookup failed: ${existing.error.message}`);
+    if (existing.data && String(existing.data.content_hash) === record.content_hash) {
+      return { id: String(existing.data.id), created: false, changed: false };
+    }
+    const { data, error } = await this.client
+      .from("uat_observations")
+      .upsert({ ...record, updated_at: new Date().toISOString() }, { onConflict: "source_github_path,observation_id" })
+      .select("id")
+      .single();
+    if (error || !data) throw new Error(`Supabase UAT observation upsert failed: ${error?.message ?? "empty response"}`);
+    return { id: String(data.id), created: !existing.data, changed: true };
+  }
+
+  async upsertUATEvaluation(observationId: string, evaluation: UATEvaluation): Promise<void> {
+    const { error } = await this.client.from("uat_observation_evaluations").upsert({
+      observation_id: observationId,
+      root_cause: evaluation.rootCause,
+      resolution_decision: evaluation.resolutionDecision,
+      product_limitation_flag: evaluation.productLimitationFlag,
+      resolution_status: evaluation.resolutionStatus,
+      updated_at: new Date().toISOString()
+    }, { onConflict: "observation_id" });
+    if (error) throw new Error(`Supabase UAT evaluation upsert failed: ${error.message}`);
   }
 }
 

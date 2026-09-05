@@ -39,6 +39,8 @@ The server binds to `0.0.0.0` and uses the platform-provided `PORT` value. It ca
 
 Apply `supabase/migrations/002_retrieval_filters.sql` after the original migration before using document-type filters or exact requirement lookup. It preserves the 0.70 similarity threshold and cosine/HNSW retrieval, adds server-side `BRD`/`RCA` filtering, and adds the exact `get_requirement_chunks` RPC.
 
+Apply `supabase/migrations/003_uat_observations.sql` for UAT ingestion. It creates dedicated `uat_observations` and `uat_observation_evaluations` tables; UAT rows remain structured and are not embedded into the BRD/RCA vector index.
+
 ## GitHub ingestion
 
 Add these variables to `.env`:
@@ -67,7 +69,7 @@ npm run test:integration
 
 ## GitHub Webhook
 
-`POST /webhook/github` automatically re-indexes changed Markdown documents from the configured GitHub documentation repository. It verifies the GitHub HMAC SHA-256 signature, repository, and branch before calling the existing ingestion pipeline.
+`POST /webhook/github` automatically re-indexes changed Markdown documents and ingests changed UAT workbooks from the configured GitHub documentation repository. It verifies the GitHub HMAC SHA-256 signature, repository, and branch before calling the existing ingestion pipeline.
 
 Required variables:
 
@@ -78,9 +80,11 @@ GITHUB_REPO=your-github-repository
 GITHUB_BRANCH=main
 ```
 
-Supported: `documents/**/*.md` under `documents/BRD/` or `documents/RCA/`.
+Supported: `documents/**/*.md` under `documents/BRD/` or `documents/RCA/`, plus `.xlsx` workbooks under `documents/UAT/`.
 
-Ignored for now: `.csv`, `.docx`, `.pdf`, and `.xlsx`. Removed Markdown files are reported as `deletion_not_supported` because the current Supabase layer does not provide safe document deletion.
+Store QA workbooks using a predictable path such as `documents/UAT/2026/login/UAT_Observation_Report_TC-LOGIN-001.xlsx`. The workbook parser discovers sheets and header rows, skips blank rows, validates observation ID/expected behavior/actual behavior, preserves sheet and source row metadata, and stores historical outcome columns separately as evaluation metadata. Repeated unchanged rows are skipped; changed rows are updated by source path and observation ID.
+
+Ignored for now: `.csv`, `.docx`, and `.pdf`. Removed files are reported as `deletion_not_supported` because the current Supabase layer does not provide safe deletion.
 
 ## MCP
 

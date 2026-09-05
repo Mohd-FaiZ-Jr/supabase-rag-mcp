@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import { indexDocument } from "../ingestion/index-document.js";
+import { ingestUATObservations } from "../ingestion/uat-observation.js";
+import { parseUATWorkbook } from "../parser/uat-excel.js";
 import { GeminiEmbeddingService } from "../services/gemini.js";
 import { GithubService } from "../services/github.js";
 import { SupabaseService } from "../services/supabase.js";
@@ -10,7 +12,7 @@ type RawBodyRequest = Request & { rawBody?: Buffer };
 type WebhookLogger = Pick<Console, "log" | "error">;
 
 export type GithubWebhookDependencies = {
-  github: Pick<GithubService, "getMarkdownFile">;
+  github: Pick<GithubService, "getMarkdownFile" | "getFile">;
   gemini: GeminiEmbeddingService;
   supabase: SupabaseService;
   logger?: WebhookLogger;
@@ -23,7 +25,14 @@ type PushPayload = {
   head_commit?: { added?: unknown; modified?: unknown; removed?: unknown } | null;
 };
 
-type FileResult = { path: string; status?: string; reason?: string };
+type FileResult = {
+  path: string;
+  status?: string;
+  reason?: string;
+  observationsProcessed?: number;
+  observationsCreated?: number;
+  observationsUpdated?: number;
+};
 
 export function createGithubWebhookHandler(config: AppConfig, provided?: GithubWebhookDependencies) {
   let dependencies = provided;
@@ -96,9 +105,16 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
 
       try {
         logger.log(`Ingesting: ${path}`);
-        const document = await dependencySet.github.getMarkdownFile(path);
-        const result = await indexDocument(document, dependencySet.gemini, dependencySet.supabase, logger);
-        processed.push({ path, status: result.status === "skipped" ? "skipped" : "ingested" });
+        if (isUATWorkbook(path)) {
+          const file = await dependencySet.github.getFile(path);
+          const parsed = parseUATWorkbook(file.content, path);
+          const result = await ingestUATObservations(parsed.observations, parsed.sheets, dependencySet.supabase);
+          processed.push({ path, status: result.status, observationsProcessed: result.observationsProcessed, observationsCreated: result.observationsCreated, observationsUpdated: result.observationsUpdated });
+        } else {
+          const document = await dependencySet.github.getMarkdownFile(path);
+          const result = await indexDocument(document, dependencySet.gemini, dependencySet.supabase, logger);
+          processed.push({ path, status: result.status === "skipped" ? "skipped" : "ingested" });
+        }
         logger.log(`Ingestion successful: ${path}`);
       } catch (error) {
         ingestionFailed = true;
@@ -175,7 +191,12 @@ function normalizePath(path: string): string | null {
 
 function classifyPath(path: string): string {
   if (!path.startsWith("documents/")) return "outside_documents";
+  if (isUATWorkbook(path)) return "supported";
   if (!path.toLowerCase().endsWith(".md")) return "unsupported_file_type";
   if (!/^documents\/(?:BRD|RCA)\/.+\.md$/i.test(path)) return "unsupported_document_path";
   return "supported";
+}
+
+function isUATWorkbook(path: string): boolean {
+  return /^documents\/UAT\/.+\.xlsx$/i.test(path);
 }

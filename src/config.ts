@@ -5,6 +5,7 @@ export type AppConfig = {
   supabaseServiceRoleKey: string;
   geminiApiKey: string;
   geminiEmbeddingModel: string;
+  geminiEmbeddingMinDelayMs?: number;
   embeddingDimension: number;
   defaultTopK: number;
   port: number;
@@ -50,6 +51,7 @@ export function loadConfig(requireSecrets = true): AppConfig {
     supabaseServiceRoleKey: requireSecrets ? required("SUPABASE_SERVICE_ROLE_KEY") : process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
     geminiApiKey: requireSecrets ? required("GEMINI_API_KEY") : process.env.GEMINI_API_KEY ?? "",
     geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL?.trim() || "gemini-embedding-2",
+    geminiEmbeddingMinDelayMs: positiveInteger("GEMINI_EMBEDDING_MIN_DELAY_MS", 675),
     embeddingDimension: embeddingDimension(),
     defaultTopK: positiveInteger("DEFAULT_TOP_K", 5),
     port: positiveInteger("PORT", 3000),

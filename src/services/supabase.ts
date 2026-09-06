@@ -143,6 +143,12 @@ export class SupabaseService {
     if (error) throw new Error(`Supabase old chunk removal failed: ${error.message}`);
   }
 
+  async getDocumentChunkIndexes(documentId: string): Promise<Set<number>> {
+    const { data, error } = await this.client.from("document_chunks").select("chunk_index").eq("document_id", documentId);
+    if (error) throw new Error(`Supabase existing chunk lookup failed: ${error.message}`);
+    return new Set((data ?? []).map((row) => Number(row.chunk_index)).filter((index) => Number.isInteger(index)));
+  }
+
   async insertDocumentChunks(chunks: DocumentChunkInsert[]): Promise<void> {
     if (chunks.length === 0) throw new Error("Cannot insert an empty chunk set");
     if (chunks.some((chunk) => chunk.embedding.length !== this.config.embeddingDimension)) {

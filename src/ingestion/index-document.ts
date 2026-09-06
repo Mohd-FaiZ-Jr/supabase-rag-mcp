@@ -25,6 +25,8 @@ export async function indexDocument(
   logger.log(`Chunks: ${chunks.length}`);
 
   const existing = await supabase.getDocumentByPath(document.path);
+  let resumableChunkIndexes = new Set<number>();
+  let documentIsIncomplete = false;
   if (existing?.contentHash === contentHash) {
     try {
       await supabase.verifyIndexedDocument(existing.id, chunks.length);
@@ -32,6 +34,8 @@ export async function indexDocument(
       return { status: "skipped", chunkCount: chunks.length, contentHash };
     } catch {
       logger.log("Supabase: existing document is incomplete; rebuilding chunks");
+      documentIsIncomplete = true;
+      resumableChunkIndexes = await supabase.getDocumentChunkIndexes(existing.id);
     }
   }
 
@@ -43,26 +47,28 @@ export async function indexDocument(
     content_hash: contentHash
   });
   logger.log("Supabase: document upserted");
-  await supabase.deleteDocumentChunks(storedDocument.id);
+  if (!documentIsIncomplete) await supabase.deleteDocumentChunks(storedDocument.id);
 
-  const chunkRecords = [];
   logger.log(`Generating embeddings: 0/${chunks.length}`);
   for (const chunk of chunks) {
+    if (resumableChunkIndexes.has(chunk.chunkIndex)) {
+      logger.log(`Reusing existing embedding: ${chunk.chunkIndex + 1}/${chunks.length}`);
+      continue;
+    }
     const embedding = await gemini.embedDocument(chunk.content, `${document.filename} - ${String(chunk.metadata.section)}`);
     if (embedding.length !== GEMINI_EMBEDDING_DIMENSION) {
       throw new Error(`Embedding dimension mismatch for chunk ${chunk.chunkIndex}: expected ${GEMINI_EMBEDDING_DIMENSION}, received ${embedding.length}`);
     }
-    chunkRecords.push({
+    await supabase.insertDocumentChunks([{
       document_id: storedDocument.id,
       chunk_index: chunk.chunkIndex,
       content: chunk.content,
       metadata: chunk.metadata,
       embedding
-    });
+    }]);
     logger.log(`Generating embeddings: ${chunk.chunkIndex + 1}/${chunks.length}`);
   }
 
-  await supabase.insertDocumentChunks(chunkRecords);
   logger.log("Supabase: chunks inserted");
   await supabase.verifyIndexedDocument(storedDocument.id, chunks.length);
   logger.log("Ingestion complete.");

@@ -87,6 +87,7 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
 
     const logger = dependencies?.logger ?? console;
     const changed = collectChangedFiles(payload);
+    logger.log(`Webhook validated: ${owner}/${repository}, branch: ${config.githubBranch}`);
     logger.log(`GitHub webhook received: ${owner}/${repository}, changed files: ${changed.size}`);
     const processed: FileResult[] = [];
     const ignored: FileResult[] = [];
@@ -107,7 +108,7 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
 
       processed.push({ path, status: "queued" });
       const key = `${typeof payload.after === "string" ? payload.after : "unknown-commit"}:${path}`;
-      enqueueIngestion(key, () => ingestFile(path, dependencySet, logger));
+      enqueueIngestion(key, () => ingestFile(path, dependencySet, logger), logger);
     }
 
     response.status(202).json({
@@ -119,11 +120,22 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
       ignored,
       removed
     });
+    logger.log("Webhook response sent: 202");
   };
 
-  function enqueueIngestion(key: string, task: () => Promise<void>): void {
+  function enqueueIngestion(key: string, task: () => Promise<void>, logger: WebhookLogger): void {
     if (inFlight.has(key)) return;
-    const taskPromise = Promise.resolve().then(task).finally(() => {
+    const taskPromise = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        void task().catch((error) => {
+          logger.error("Background ingestion failed", {
+            errorName: error instanceof Error ? error.name : "UnknownError",
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined
+          });
+        }).finally(resolve);
+      });
+    }).finally(() => {
       if (inFlight.get(key) === taskPromise) inFlight.delete(key);
     });
     inFlight.set(key, taskPromise);
@@ -132,12 +144,14 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
 
 async function ingestFile(path: string, dependencies: GithubWebhookDependencies, logger: WebhookLogger): Promise<void> {
   try {
-    logger.log(`Ingesting: ${path}`);
+    logger.log(`Background ingestion started: ${path}`);
+    logger.log(`Processing file: ${path}`);
     if (isUATWorkbook(path)) {
       const file = await dependencies.github.getFile(path);
       const parsed = parseUATWorkbook(file.content, path);
       const result = await ingestUATObservations(parsed.observations, parsed.sheets, dependencies.supabase);
       const indexed = await indexDocument({ ...file, content: buildUATDocumentContent(parsed) }, dependencies.gemini, dependencies.supabase, logger);
+      if (indexed.status === "skipped") logger.log(`Skipping unchanged file: ${path}`);
       logger.log(`Ingestion successful: ${path}`);
       logger.log(`Ingestion result: ${indexed.status === "skipped" ? "skipped" : result.status}`);
     } else if (isJsonDocument(path)) {
@@ -147,17 +161,20 @@ async function ingestFile(path: string, dependencies: GithubWebhookDependencies,
         logger.log(`Ingestion successful: ${path}`);
         return;
       }
-      await indexDocument(parsed.document, dependencies.gemini, dependencies.supabase, logger, {
+      const indexed = await indexDocument(parsed.document, dependencies.gemini, dependencies.supabase, logger, {
         documentType: parsed.documentType,
         contentHash: parsed.contentHash,
         chunkMetadata: parsed.chunkMetadata
       });
+      if (indexed.status === "skipped") logger.log(`Skipping unchanged file: ${path}`);
       logger.log(`Ingestion successful: ${path}`);
     } else {
       const document = await dependencies.github.getMarkdownFile(path);
-      await indexDocument(document, dependencies.gemini, dependencies.supabase, logger);
+      const indexed = await indexDocument(document, dependencies.gemini, dependencies.supabase, logger);
+      if (indexed.status === "skipped") logger.log(`Skipping unchanged file: ${path}`);
       logger.log(`Ingestion successful: ${path}`);
     }
+    logger.log(`Background ingestion completed: ${path}`);
   } catch (error) {
     logger.error("Ingestion failed", {
       path,
@@ -231,5 +248,5 @@ function isUATWorkbook(path: string): boolean {
 }
 
 function isJsonDocument(path: string): boolean {
-  return /^documents\/(?:BRD|test-cases|open-questions)\/.+\.json$/i.test(path);
+  return /^documents\/(?:BRD|TEST_CASES|OPEN_QUESTIONS)\/.+\.json$/i.test(path);
 }

@@ -56,19 +56,19 @@ test("normalizes data entities and fields", () => {
 });
 
 test("normalizes open questions", () => {
-  const { parsed, chunks: result } = chunks("documents/open-questions/questions.json", { open_questions: [{ id: "Q-1", question: "Which limits apply?", status: "open", priority: "High", source: "Workshop" }] });
+  const { parsed, chunks: result } = chunks("documents/OPEN_QUESTIONS/open_questions.json", { open_questions: [{ id: "Q-1", question: "Which limits apply?", status: "open", priority: "High", source: "Workshop" }] });
   assert.equal(parsed.documentType, "OPEN_QUESTION");
   assert.match(result[0].content, /Question: Which limits apply\?/);
 });
 
 test("normalizes an empty error catalogue as an open question", () => {
-  const { parsed, chunks: result } = chunks("documents/open-questions/error-catalogue.json", { errors: [], note: "The catalogue is pending." });
+  const { parsed, chunks: result } = chunks("documents/OPEN_QUESTIONS/error_catalogue.json", { errors: [], note: "The catalogue is pending." });
   assert.equal(parsed.documentType, "OPEN_QUESTION");
   assert.match(result[0].content, /No error codes are currently defined\. The catalogue is pending\./);
 });
 
 test("normalizes planned UAT cases as TEST_CASE content", () => {
-  const { parsed, chunks: result } = chunks("documents/test-cases/uat-cases.json", { uat_cases: [{ id: "TC-1", acceptance_criterion_id: "AC-1", requirement_id: "FR-1", precondition: "Account exists", steps: ["Enter amount", "Submit"], expected_result: "Transfer is created" }] });
+  const { parsed, chunks: result } = chunks("documents/TEST_CASES/uat_cases.json", { uat_cases: [{ id: "TC-1", acceptance_criterion_id: "AC-1", requirement_id: "FR-1", precondition: "Account exists", steps: ["Enter amount", "Submit"], expected_result: "Transfer is created" }] });
   assert.equal(parsed.documentType, "TEST_CASE");
   assert.match(result[0].content, /PLANNED — not yet executed/);
   assert.match(result[0].content, /1\. Enter amount 2\. Submit/);
@@ -79,7 +79,7 @@ test("rejects malformed JSON with a specific path", () => {
 });
 
 test("skips coverage reports", () => {
-  const parsed = parseJsonDocument(file("documents/open-questions/coverage.json", { coverage_report: { total: 80 } }));
+  const parsed = parseJsonDocument(file("documents/OPEN_QUESTIONS/coverage.json", { coverage_report: { total: 80 } }));
   assert.equal(parsed.skipped, true);
 });
 

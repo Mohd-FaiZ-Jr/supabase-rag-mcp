@@ -1,5 +1,5 @@
-import { createHmac } from "node:crypto";
-import { createServer, type Server } from "node:http";
+import { createHash, createHmac } from "node:crypto";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
@@ -77,6 +77,18 @@ function pushPayload(files: { added?: string[]; modified?: string[]; removed?: s
     repository: { name: repository, owner: { login: "acme" } },
     commits: files.map((file) => ({ ...file }))
   };
+}
+
+function waitFor(predicate: () => boolean): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const check = () => {
+      if (predicate()) return resolve();
+      if (Date.now() - startedAt > 2_000) return reject(new Error("Timed out waiting for background ingestion"));
+      setTimeout(check, 5);
+    };
+    check();
+  });
 }
 
 async function json(response: Response): Promise<Record<string, any>> {
@@ -216,4 +228,110 @@ test("unsupported formats, unrelated files, unsafe paths, and removals are repor
   assert.equal(result.ignored.some((item: any) => item.reason === "unsupported_file_type"), true);
   assert.equal(result.ignored.some((item: any) => item.reason === "outside_documents"), true);
   assert.equal(result.removed[0].reason, "deletion_not_supported");
+});
+
+test("background ingestion completes after the webhook client disconnects", async () => {
+  const { dependencies } = createDependencies();
+  let embeddingStarted = false;
+  let resolveEmbedding!: () => void;
+  let resolveInserted!: () => void;
+  const embeddingReleased = new Promise<void>((resolve) => { resolveEmbedding = resolve; });
+  const ingestionComplete = new Promise<void>((resolve) => { resolveInserted = resolve; });
+  dependencies.gemini.embedDocument = async () => {
+    embeddingStarted = true;
+    await embeddingReleased;
+    return Array.from({ length: 1536 }, () => 0.01);
+  };
+  dependencies.supabase.insertDocumentChunks = async () => resolveInserted();
+
+  const payload = pushPayload([{ added: ["documents/BRD/disconnected.md"] }]);
+  const body = JSON.stringify(payload);
+  const signature = `sha256=${createHmac("sha256", config.githubWebhookSecret ?? "").update(body).digest("hex")}`;
+  const app = createApp(config, dependencies);
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const port = (server.address() as AddressInfo).port;
+  const status = await new Promise<number>((resolve, reject) => {
+    const clientRequest = httpRequest({
+      hostname: "127.0.0.1",
+      port,
+      path: "/webhook/github",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        "x-github-event": "push",
+        "x-hub-signature-256": signature
+      }
+    }, (clientResponse) => {
+      resolve(clientResponse.statusCode ?? 0);
+      clientRequest.destroy();
+    });
+    clientRequest.on("error", (error) => {
+      if ((error as NodeJS.ErrnoException).code !== "ECONNRESET") reject(error);
+    });
+    clientRequest.end(body);
+  });
+
+  assert.equal(status, 202);
+  await waitFor(() => embeddingStarted);
+  resolveEmbedding();
+  await ingestionComplete;
+  await close(server);
+});
+
+test("recognizes uppercase JSON folders and skips unchanged BRD files", async () => {
+  const { dependencies } = createDependencies();
+  const existingBrd = new Set([
+    "documents/BRD/charter.md",
+    "documents/BRD/scope_agreement.md",
+    "documents/BRD/brd.json",
+    "documents/BRD/business_rules.json",
+    "documents/BRD/requirements.json",
+    "documents/BRD/acceptance_criteria.json",
+    "documents/BRD/data_spec.json"
+  ]);
+  const files: Record<string, { content: Buffer; filename: string; path: string; owner: string; repository: string; branch: string }> = {};
+  for (const path of existingBrd) {
+    files[path] = {
+      path,
+      filename: path.split("/").pop() ?? path,
+      content: Buffer.from(path.endsWith(".md") ? `# ${path}\n\nContent` : JSON.stringify({ business_rules: [{ id: path, rule: "Approve" }] })),
+      owner: "acme",
+      repository: "docs",
+      branch: "main"
+    };
+  }
+  files["documents/TEST_CASES/uat_cases.json"] = { ...files["documents/BRD/brd.json"], path: "documents/TEST_CASES/uat_cases.json", filename: "uat_cases.json", content: Buffer.from(JSON.stringify({ uat_cases: [{ id: "TC-1", expected_result: "Pass" }] })) };
+  files["documents/OPEN_QUESTIONS/open_questions.json"] = { ...files["documents/BRD/brd.json"], path: "documents/OPEN_QUESTIONS/open_questions.json", filename: "open_questions.json", content: Buffer.from(JSON.stringify({ open_questions: [{ id: "Q-1", question: "Unknown" }] })) };
+  files["documents/OPEN_QUESTIONS/error_catalogue.json"] = { ...files["documents/BRD/brd.json"], path: "documents/OPEN_QUESTIONS/error_catalogue.json", filename: "error_catalogue.json", content: Buffer.from(JSON.stringify({ errors: [{ code: "E-1", message: "Unknown" }] })) };
+  const embeddingPaths: string[] = [];
+  const successfulPaths: string[] = [];
+  const ingestionErrors: unknown[] = [];
+  dependencies.github.getMarkdownFile = async (path: string) => ({ ...files[path], content: files[path].content.toString("utf8") });
+  dependencies.github.getFile = async (path: string) => files[path];
+  dependencies.gemini.embedDocument = async (_content: string, title: string) => {
+    embeddingPaths.push(title.split(" - ")[0]);
+    return Array.from({ length: 1536 }, () => 0.01);
+  };
+  dependencies.supabase.getDocumentByPath = async (path: string) => existingBrd.has(path)
+    ? { id: path, githubPath: path, contentHash: path.endsWith(".md")
+      ? createHash("sha256").update(files[path].content.toString("utf8"), "utf8").digest("hex")
+      : createHash("sha256").update(files[path].content).digest("hex") }
+    : null;
+  dependencies.supabase.verifyIndexedDocument = async () => undefined;
+  dependencies.supabase.upsertDocument = async (record: { github_path: string; content_hash: string }) => ({ id: record.github_path, githubPath: record.github_path, contentHash: record.content_hash });
+  dependencies.logger = { log: (message: string) => { if (message.startsWith("Ingestion successful:")) successfulPaths.push(message.slice("Ingestion successful: ".length)); }, error: (...args: unknown[]) => ingestionErrors.push(args) };
+
+  const allPaths = [...existingBrd, "documents/TEST_CASES/uat_cases.json", "documents/OPEN_QUESTIONS/open_questions.json", "documents/OPEN_QUESTIONS/error_catalogue.json"];
+  const response = await requestWebhook(pushPayload([{ added: allPaths }]), { dependencies });
+  const result = await json(response);
+  assert.equal(response.status, 202);
+  assert.deepEqual(result.processed.map((item: any) => item.path), allPaths);
+  await waitFor(() => successfulPaths.length + ingestionErrors.length === allPaths.length);
+  assert.deepEqual(ingestionErrors, []);
+  assert.equal(embeddingPaths.some((path) => existingBrd.has(path)), false);
+  assert.equal(embeddingPaths.some((path) => path.endsWith("uat_cases.json")), true);
+  assert.equal(embeddingPaths.some((path) => path.endsWith("open_questions.json")), true);
+  assert.equal(embeddingPaths.some((path) => path.endsWith("error_catalogue.json")), true);
 });

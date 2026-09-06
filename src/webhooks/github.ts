@@ -21,6 +21,7 @@ export type GithubWebhookDependencies = {
 
 type PushPayload = {
   ref?: unknown;
+  after?: unknown;
   repository?: { name?: unknown; owner?: { login?: unknown } };
   commits?: unknown;
   head_commit?: { added?: unknown; modified?: unknown; removed?: unknown } | null;
@@ -37,6 +38,7 @@ type FileResult = {
 
 export function createGithubWebhookHandler(config: AppConfig, provided?: GithubWebhookDependencies) {
   let dependencies = provided;
+  const inFlight = new Map<string, Promise<void>>();
   const getDependencies = (): GithubWebhookDependencies => {
     dependencies ??= {
       github: new GithubService(config),
@@ -90,7 +92,6 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
     const ignored: FileResult[] = [];
     const removed: FileResult[] = [];
     const dependencySet = getDependencies();
-    let ingestionFailed = false;
 
     for (const [path, change] of changed) {
       const classification = classifyPath(path);
@@ -104,47 +105,13 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
         continue;
       }
 
-      try {
-        logger.log(`Ingesting: ${path}`);
-        if (isUATWorkbook(path)) {
-          const file = await dependencySet.github.getFile(path);
-          const parsed = parseUATWorkbook(file.content, path);
-          const result = await ingestUATObservations(parsed.observations, parsed.sheets, dependencySet.supabase);
-          const indexed = await indexDocument({ ...file, content: buildUATDocumentContent(parsed) }, dependencySet.gemini, dependencySet.supabase, logger);
-          processed.push({ path, status: indexed.status === "skipped" ? "skipped" : result.status, observationsProcessed: result.observationsProcessed, observationsCreated: result.observationsCreated, observationsUpdated: result.observationsUpdated });
-        } else if (isJsonDocument(path)) {
-          const file = await dependencySet.github.getFile(path);
-          const parsed = parseJsonDocument(file);
-          if (parsed.skipped) {
-            processed.push({ path, status: "skipped", reason: "coverage_report" });
-            continue;
-          }
-          const indexed = await indexDocument(parsed.document, dependencySet.gemini, dependencySet.supabase, logger, {
-            documentType: parsed.documentType,
-            contentHash: parsed.contentHash,
-            chunkMetadata: parsed.chunkMetadata
-          });
-          processed.push({ path, status: indexed.status === "skipped" ? "skipped" : "ingested" });
-        } else {
-          const document = await dependencySet.github.getMarkdownFile(path);
-          const result = await indexDocument(document, dependencySet.gemini, dependencySet.supabase, logger);
-          processed.push({ path, status: result.status === "skipped" ? "skipped" : "ingested" });
-        }
-        logger.log(`Ingestion successful: ${path}`);
-      } catch (error) {
-        ingestionFailed = true;
-        processed.push({ path, status: "failed" });
-        logger.error("Ingestion failed", {
-          path,
-          errorName: error instanceof Error ? error.name : "UnknownError",
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined
-        });
-      }
+      processed.push({ path, status: "queued" });
+      const key = `${typeof payload.after === "string" ? payload.after : "unknown-commit"}:${path}`;
+      enqueueIngestion(key, () => ingestFile(path, dependencySet, logger));
     }
 
-    response.status(ingestionFailed ? 502 : 200).json({
-      ok: !ingestionFailed,
+    response.status(202).json({
+      ok: true,
       event: "push",
       repository: `${owner}/${repository}`,
       branch: config.githubBranch,
@@ -153,6 +120,52 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
       removed
     });
   };
+
+  function enqueueIngestion(key: string, task: () => Promise<void>): void {
+    if (inFlight.has(key)) return;
+    const taskPromise = Promise.resolve().then(task).finally(() => {
+      if (inFlight.get(key) === taskPromise) inFlight.delete(key);
+    });
+    inFlight.set(key, taskPromise);
+  }
+}
+
+async function ingestFile(path: string, dependencies: GithubWebhookDependencies, logger: WebhookLogger): Promise<void> {
+  try {
+    logger.log(`Ingesting: ${path}`);
+    if (isUATWorkbook(path)) {
+      const file = await dependencies.github.getFile(path);
+      const parsed = parseUATWorkbook(file.content, path);
+      const result = await ingestUATObservations(parsed.observations, parsed.sheets, dependencies.supabase);
+      const indexed = await indexDocument({ ...file, content: buildUATDocumentContent(parsed) }, dependencies.gemini, dependencies.supabase, logger);
+      logger.log(`Ingestion successful: ${path}`);
+      logger.log(`Ingestion result: ${indexed.status === "skipped" ? "skipped" : result.status}`);
+    } else if (isJsonDocument(path)) {
+      const file = await dependencies.github.getFile(path);
+      const parsed = parseJsonDocument(file);
+      if (parsed.skipped) {
+        logger.log(`Ingestion successful: ${path}`);
+        return;
+      }
+      await indexDocument(parsed.document, dependencies.gemini, dependencies.supabase, logger, {
+        documentType: parsed.documentType,
+        contentHash: parsed.contentHash,
+        chunkMetadata: parsed.chunkMetadata
+      });
+      logger.log(`Ingestion successful: ${path}`);
+    } else {
+      const document = await dependencies.github.getMarkdownFile(path);
+      await indexDocument(document, dependencies.gemini, dependencies.supabase, logger);
+      logger.log(`Ingestion successful: ${path}`);
+    }
+  } catch (error) {
+    logger.error("Ingestion failed", {
+      path,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
+  }
 }
 
 function isValidSignature(header: string | undefined, body: Buffer, secret: string): boolean {

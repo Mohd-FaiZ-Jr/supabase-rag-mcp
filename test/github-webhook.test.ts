@@ -90,7 +90,7 @@ test("valid push ingests Markdown files and deduplicates multiple commits", asyn
     { modified: ["documents/BRD/b.md"], added: ["documents/RCA/RCA-001.md", "README.md"] }
   ]), { dependencies });
   const result = await json(response);
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 202);
   assert.equal(result.ok, true);
   assert.deepEqual(calls.sort(), ["documents/BRD/a.md", "documents/BRD/b.md", "documents/RCA/RCA-001.md"]);
   assert.equal(result.ignored.some((item: any) => item.path === "README.md"), true);
@@ -108,8 +108,8 @@ test("valid push routes supported JSON files through the shared indexer", async 
   });
   const response = await requestWebhook(pushPayload([{ added: ["documents/BRD/business-rules.json"] }]), { dependencies });
   const result = await json(response);
-  assert.equal(response.status, 200);
-  assert.equal(result.processed[0].status, "ingested");
+  assert.equal(response.status, 202);
+  assert.equal(result.processed[0].status, "queued");
   assert.deepEqual(calls, []);
 });
 
@@ -152,7 +152,7 @@ test("malformed JSON is rejected safely", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("ingestion failures log the underlying error and return 502", async () => {
+test("background ingestion failures log the underlying error", async () => {
   const logs: unknown[][] = [];
   const dependencies = createDependencies().dependencies;
   dependencies.gemini.embedDocument = async () => {
@@ -162,8 +162,9 @@ test("ingestion failures log the underlying error and return 502", async () => {
 
   const response = await requestWebhook(pushPayload([{ added: ["documents/BRD/failing.md"] }]), { dependencies });
   const result = await json(response);
-  assert.equal(response.status, 502);
-  assert.equal(result.ok, false);
+  assert.equal(response.status, 202);
+  assert.equal(result.ok, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(logs.length, 1);
   assert.equal(logs[0][0], "Ingestion failed");
   assert.deepEqual(logs[0][1], {
@@ -175,6 +176,34 @@ test("ingestion failures log the underlying error and return 502", async () => {
   assert.match((logs[0][1] as { stack: string }).stack, /Gemini embedding request failed \(503\)/);
 });
 
+test("responds before multi-file background ingestion completes", async () => {
+  const { dependencies } = createDependencies();
+  let releaseEmbedding!: () => void;
+  let completed = false;
+  const embeddingReleased = new Promise<void>((resolve) => { releaseEmbedding = resolve; });
+  const ingestionComplete = new Promise<void>((resolve) => {
+    dependencies.supabase.insertDocumentChunks = async () => {
+      completed = true;
+      resolve();
+    };
+  });
+  dependencies.gemini.embedDocument = async () => {
+    await embeddingReleased;
+    return Array.from({ length: 1536 }, () => 0.01);
+  };
+
+  const response = await requestWebhook(pushPayload([{ added: ["documents/BRD/a.md", "documents/BRD/b.md"] }]), { dependencies });
+  const result = await json(response);
+  assert.equal(response.status, 202);
+  assert.equal(result.ok, true);
+  assert.equal(completed, false);
+  assert.deepEqual(result.processed.map((item: any) => item.status), ["queued", "queued"]);
+
+  releaseEmbedding();
+  await ingestionComplete;
+  assert.equal(completed, true);
+});
+
 test("unsupported formats, unrelated files, unsafe paths, and removals are reported", async () => {
   const { dependencies, calls } = createDependencies();
   const response = await requestWebhook(pushPayload([{
@@ -182,7 +211,7 @@ test("unsupported formats, unrelated files, unsafe paths, and removals are repor
     removed: ["documents/RCA/old.md"]
   }]), { dependencies });
   const result = await json(response);
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 202);
   assert.equal(calls.length, 0);
   assert.equal(result.ignored.some((item: any) => item.reason === "unsupported_file_type"), true);
   assert.equal(result.ignored.some((item: any) => item.reason === "outside_documents"), true);

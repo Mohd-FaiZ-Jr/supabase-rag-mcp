@@ -1,20 +1,22 @@
 import { createHash } from "node:crypto";
 import { chunkMarkdown } from "./chunker.js";
-import type { IngestionDocument } from "./types.js";
+import type { DocumentType, IngestionDocument, SemanticChunk } from "./types.js";
 import { GEMINI_EMBEDDING_DIMENSION, GeminiEmbeddingService } from "../services/gemini.js";
 import { SupabaseService } from "../services/supabase.js";
 
 type IngestionLogger = Pick<Console, "log">;
+type IndexDocumentOptions = { documentType?: DocumentType; contentHash?: string; chunkMetadata?: Array<Record<string, unknown>> };
 
 export async function indexDocument(
   document: IngestionDocument,
   gemini: GeminiEmbeddingService,
   supabase: SupabaseService,
-  logger: IngestionLogger = console
+  logger: IngestionLogger = console,
+  options: IndexDocumentOptions = {}
 ): Promise<{ status: "indexed" | "skipped"; chunkCount: number; contentHash: string }> {
-  const documentType = detectDocumentType(document.path);
-  const contentHash = createHash("sha256").update(document.content, "utf8").digest("hex");
-  const chunks = chunkMarkdown({ path: document.path, content: document.content, documentType });
+  const documentType = options.documentType ?? detectDocumentType(document.path);
+  const contentHash = options.contentHash ?? createHash("sha256").update(document.content, "utf8").digest("hex");
+  const chunks = chunkMarkdown({ path: document.path, content: document.content, documentType }).map((chunk, index) => applyChunkMetadata(chunk, options.chunkMetadata?.[index]));
   if (chunks.length === 0) throw new Error(`No semantic chunks were produced for ${document.path}`);
 
   logger.log(`Document: ${document.filename}`);
@@ -67,7 +69,12 @@ export async function indexDocument(
   return { status: "indexed", chunkCount: chunks.length, contentHash };
 }
 
-export function detectDocumentType(path: string): "BRD" | "RCA" | "UAT" {
+function applyChunkMetadata(chunk: SemanticChunk, metadata?: Record<string, unknown>): SemanticChunk {
+  if (!metadata) return chunk;
+  return { ...chunk, metadata: { ...chunk.metadata, ...metadata } };
+}
+
+export function detectDocumentType(path: string): DocumentType {
   if (/(?:^|\/)documents\/UAT(?:\/|$)/i.test(path)) return "UAT";
   const match = /(?:^|\/)documents\/(BRD|RCA)(?:\/|$)/i.exec(path);
   if (!match) throw new Error(`Unsupported document path: ${path}. Expected documents/BRD/... or documents/RCA/...`);

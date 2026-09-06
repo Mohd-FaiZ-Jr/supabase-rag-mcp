@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { AppConfig } from "../config.js";
-import type { ChunkMetadata } from "../ingestion/types.js";
+import type { ChunkMetadata, DocumentType } from "../ingestion/types.js";
 
 export type SearchResult = {
   chunkId: string;
@@ -26,7 +26,7 @@ export type DocumentChunkInsert = {
 
 export type RequirementResult = {
   requirementId: string;
-  documentType: "BRD" | "RCA" | "UAT";
+  documentType: DocumentType;
   source: string;
   sections: string[];
   chunks: Array<{ chunkId: string; content: string; metadata: ChunkMetadata }>;
@@ -67,7 +67,7 @@ export class SupabaseService {
     });
   }
 
-  async searchDocuments(embedding: number[], matchCount: number, documentType?: "BRD" | "RCA" | "UAT"): Promise<SearchResult[]> {
+  async searchDocuments(embedding: number[], matchCount: number, documentType?: DocumentType): Promise<SearchResult[]> {
     if (embedding.length !== this.config.embeddingDimension) {
       throw new Error(`Embedding dimension mismatch: expected ${this.config.embeddingDimension}, received ${embedding.length}`);
     }

@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.js";
 import { indexDocument } from "../ingestion/index-document.js";
 import { ingestUATObservations } from "../ingestion/uat-observation.js";
 import { buildUATDocumentContent, parseUATWorkbook } from "../parser/uat-excel.js";
+import { parseJsonDocument } from "../parser/json.js";
 import { GeminiEmbeddingService } from "../services/gemini.js";
 import { GithubService } from "../services/github.js";
 import { SupabaseService } from "../services/supabase.js";
@@ -111,6 +112,19 @@ export function createGithubWebhookHandler(config: AppConfig, provided?: GithubW
           const result = await ingestUATObservations(parsed.observations, parsed.sheets, dependencySet.supabase);
           const indexed = await indexDocument({ ...file, content: buildUATDocumentContent(parsed) }, dependencySet.gemini, dependencySet.supabase, logger);
           processed.push({ path, status: indexed.status === "skipped" ? "skipped" : result.status, observationsProcessed: result.observationsProcessed, observationsCreated: result.observationsCreated, observationsUpdated: result.observationsUpdated });
+        } else if (isJsonDocument(path)) {
+          const file = await dependencySet.github.getFile(path);
+          const parsed = parseJsonDocument(file);
+          if (parsed.skipped) {
+            processed.push({ path, status: "skipped", reason: "coverage_report" });
+            continue;
+          }
+          const indexed = await indexDocument(parsed.document, dependencySet.gemini, dependencySet.supabase, logger, {
+            documentType: parsed.documentType,
+            contentHash: parsed.contentHash,
+            chunkMetadata: parsed.chunkMetadata
+          });
+          processed.push({ path, status: indexed.status === "skipped" ? "skipped" : "ingested" });
         } else {
           const document = await dependencySet.github.getMarkdownFile(path);
           const result = await indexDocument(document, dependencySet.gemini, dependencySet.supabase, logger);
@@ -193,6 +207,7 @@ function normalizePath(path: string): string | null {
 function classifyPath(path: string): string {
   if (!path.startsWith("documents/")) return "outside_documents";
   if (isUATWorkbook(path)) return "supported";
+  if (isJsonDocument(path)) return "supported";
   if (!path.toLowerCase().endsWith(".md")) return "unsupported_file_type";
   if (!/^documents\/(?:BRD|RCA)\/.+\.md$/i.test(path)) return "unsupported_document_path";
   return "supported";
@@ -200,4 +215,8 @@ function classifyPath(path: string): string {
 
 function isUATWorkbook(path: string): boolean {
   return /^documents\/UAT\/.+\.xlsx$/i.test(path);
+}
+
+function isJsonDocument(path: string): boolean {
+  return /^documents\/(?:BRD|test-cases|open-questions)\/.+\.json$/i.test(path);
 }

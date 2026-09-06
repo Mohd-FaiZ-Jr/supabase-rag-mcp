@@ -96,6 +96,23 @@ test("valid push ingests Markdown files and deduplicates multiple commits", asyn
   assert.equal(result.ignored.some((item: any) => item.path === "README.md"), true);
 });
 
+test("valid push routes supported JSON files through the shared indexer", async () => {
+  const { dependencies, calls } = createDependencies();
+  dependencies.github.getFile = async (path: string) => ({
+    path,
+    filename: path.split("/").pop() ?? path,
+    content: Buffer.from(JSON.stringify({ business_rules: [{ id: "BR-1", rule: "Approve", status: "draft" }] })),
+    owner: "acme",
+    repository: "docs",
+    branch: "main"
+  });
+  const response = await requestWebhook(pushPayload([{ added: ["documents/BRD/business-rules.json"] }]), { dependencies });
+  const result = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(result.processed[0].status, "ingested");
+  assert.deepEqual(calls, []);
+});
+
 test("invalid and missing signatures never invoke ingestion", async () => {
   const { dependencies, calls } = createDependencies();
   const payload = pushPayload([{ added: ["documents/BRD/test.md"] }]);

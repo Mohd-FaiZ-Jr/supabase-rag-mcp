@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import { indexDocument } from "../ingestion/index-document.js";
 import { ingestUATObservations } from "../ingestion/uat-observation.js";
+import { buildTestExecutionDocumentContent, detectTestExecutionWorkbook, parseTestExecutionWorkbook } from "../parser/test-execution-excel.js";
 import { buildUATDocumentContent, parseUATWorkbook } from "../parser/uat-excel.js";
 import { parseJsonDocument } from "../parser/json.js";
 import { GeminiEmbeddingService } from "../services/gemini.js";
@@ -148,6 +149,14 @@ async function ingestFile(path: string, dependencies: GithubWebhookDependencies,
     logger.log(`Processing file: ${path}`);
     if (isUATWorkbook(path)) {
       const file = await dependencies.github.getFile(path);
+      if (detectTestExecutionWorkbook(file.content)) {
+        const parsed = parseTestExecutionWorkbook(file.content, path);
+        const indexed = await indexDocument({ ...file, content: buildTestExecutionDocumentContent(parsed) }, dependencies.gemini, dependencies.supabase, logger);
+        if (indexed.status === "skipped") logger.log(`Skipping unchanged file: ${path}`);
+        logger.log(`Ingestion successful: ${path}`);
+        logger.log(`Ingestion result: ${indexed.status === "skipped" ? "skipped" : "test_execution_parsed"}`);
+        return;
+      }
       const parsed = parseUATWorkbook(file.content, path);
       const result = await ingestUATObservations(parsed.observations, parsed.sheets, dependencies.supabase);
       const indexed = await indexDocument({ ...file, content: buildUATDocumentContent(parsed) }, dependencies.gemini, dependencies.supabase, logger);
